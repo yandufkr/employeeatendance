@@ -1,0 +1,203 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Register Employee</title>
+
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        .form-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            width: 320px;
+        }
+        h2 {
+            text-align: center;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        input[type="text"], button {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #28a745;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+        #capturedImage {
+            width: 100%;
+            margin-top: 20px;
+            display: none;
+            border-radius: 8px;
+            border: 1px solid #ccc;
+        }
+        #video {
+            border-radius: 8px;
+            border: 1px solid #ccc;
+        }
+        #overlay {
+            position: absolute;
+            top: 0; left: 0;
+            width: 320px;
+            height: 240px;
+        }
+        .video-container {
+            position: relative;
+            width: 320px;
+            height: 240px;
+        }
+    </style>
+
+    <!-- Face-api.js CDN -->
+    <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+</head>
+<body>
+    <div class="form-container">
+        <h2>Register Employee</h2>
+        <form method="POST" id="registerForm">
+            {% csrf_token %}
+            <label>Name:</label>
+            <input type="text" id="name" name="name" required />
+
+            <label>Employee ID:</label>
+            <input type="text" id="employee_id" name="employee_id" required />
+
+            <div class="video-container">
+                <video id="video" width="320" height="240" autoplay muted></video>
+                <canvas id="overlay"></canvas>
+            </div><br />
+
+            <button type="button" id="captureButton">📷 Capture Face</button><br />
+
+            <input type="hidden" name="face_encoding" id="face_encoding" required />
+            <img id="capturedImage" alt="Captured Face" />
+
+            <button type="submit">✅ Submit</button>
+        </form>
+    </div>
+
+    <script>
+    window.addEventListener('load', async () => {
+        const video = document.getElementById('video');
+        const overlay = document.getElementById('overlay');
+        const faceEncodingInput = document.getElementById('face_encoding');
+        const capturedImage = document.getElementById('capturedImage');
+        const captureButton = document.getElementById('captureButton');
+
+        // Start webcam with specific resolution
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
+            video.srcObject = stream;
+            await new Promise(resolve => video.onloadedmetadata = resolve);
+        } catch (err) {
+            alert("❌ Cannot access webcam: " + err);
+            return;
+        }
+
+        // Check if model.json exists before loading models
+        try {
+            const res = await fetch("{% static 'models/tiny_face_detector/model.json' %}");
+            if (!res.ok) throw new Error('model.json not found');
+            console.log("✅ Model manifest found for tiny_face_detector.");
+        } catch (err) {
+            alert("❌ Cannot find model.json for tiny_face_detector. Check static files.");
+            console.error(err);
+            return;
+        }
+
+        // Load models
+        try {
+            await Promise.all([
+                faceapi.nets.tinyFaceDetector.loadFromUri("{% static 'models/tiny_face_detector' %}"),
+                faceapi.nets.faceLandmark68Net.loadFromUri("{% static 'models/face_landmark_68' %}"),
+                faceapi.nets.faceRecognitionNet.loadFromUri("{% static 'models/face_recognition' %}"),
+            ]);
+            console.log("✅ Face-api.js models loaded");
+        } catch (err) {
+            alert("❌ Failed to load face detection models.");
+            console.error(err);
+            return;
+        }
+
+        // Setup canvas for drawing detections overlay
+        const displaySize = { width: video.width, height: video.height };
+        faceapi.matchDimensions(overlay, displaySize);
+
+        // Optional: Live face detection & drawing bounding box on video
+        const detectFaces = async () => {
+            const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+                .withFaceLandmarks();
+            const resizedDetections = faceapi.resizeResults(detections, displaySize);
+            const ctx = overlay.getContext('2d');
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+            faceapi.draw.drawDetections(overlay, resizedDetections);
+            faceapi.draw.drawFaceLandmarks(overlay, resizedDetections);
+            requestAnimationFrame(detectFaces);
+        };
+
+        detectFaces();
+
+        // Capture face on button click
+        captureButton.addEventListener('click', async () => {
+            try {
+                const detection = await faceapi
+                    .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+                    .withFaceLandmarks()
+                    .withFaceDescriptor();
+
+                if (!detection) {
+                    alert('⚠️ No face detected. Please try again.');
+                    return;
+                }
+
+                // Save face descriptor as JSON string
+                faceEncodingInput.value = JSON.stringify(Array.from(detection.descriptor));
+
+                // Snapshot from video for preview
+                const canvas = document.createElement('canvas');
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                capturedImage.src = canvas.toDataURL('image/png');
+                capturedImage.style.display = 'block';
+
+                alert('✅ Face captured. You can now submit the form.');
+            } catch (error) {
+                alert('❌ Error capturing face: ' + error);
+                console.error(error);
+            }
+        });
+
+        // Prevent submit if no face encoding
+        document.getElementById("registerForm").addEventListener("submit", e => {
+            if (!faceEncodingInput.value) {
+                e.preventDefault();
+                alert("❗ Please capture face before submitting.");
+            }
+        });
+    });
+    </script>
+</body>
+</html>

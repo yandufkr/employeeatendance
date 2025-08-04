@@ -1,0 +1,143 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Face Attendance</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      height: 100vh;
+      margin: 0;
+      background-color: #f0f0f0;
+      font-family: Arial, sans-serif;
+    }
+    h2 {
+      margin-bottom: 10px;
+    }
+    .video-container {
+      position: relative;
+      width: 320px;
+      height: 240px;
+      border: 2px solid #ccc;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    #status {
+      margin-top: 15px;
+      font-size: 18px;
+      color: green;
+    }
+  </style>
+</head>
+<body>
+  <h2>Face Attendance</h2>
+  <div class="video-container">
+    <video id="video" width="320" height="240" autoplay muted></video>
+    <canvas id="overlay" width="320" height="240"></canvas>
+  </div>
+  <p id="status">Initializing camera...</p>
+
+  <!-- Thank You Voice -->
+  <audio id="thankYouAudio" src="{% static 'audio/thank_you.mp3' %}"></audio>
+
+  <script>
+    const video = document.getElementById("video");
+    const overlay = document.getElementById("overlay");
+    const statusText = document.getElementById("status");
+    const thankYouAudio = document.getElementById("thankYouAudio");
+
+    let faceMatched = false;
+
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = stream;
+        statusText.textContent = "Camera initialized. Detecting face...";
+      } catch (err) {
+        statusText.textContent = "❌ Cannot access camera: " + err.message;
+        console.error(err);
+      }
+    }
+
+    async function loadModels() {
+      const base = "{% static 'models' %}";
+      await faceapi.nets.tinyFaceDetector.loadFromUri(`${base}/tiny_face_detector`);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(`${base}/face_landmark_68`);
+      await faceapi.nets.faceRecognitionNet.loadFromUri(`${base}/face_recognition`);
+      console.log("✅ Models loaded.");
+    }
+
+    async function recognizeFace(descriptor) {
+      const response = await fetch("{% url 'recognize' %}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ face_encoding: descriptor })
+      });
+      return response.json();
+    }
+
+    async function detectLoop() {
+      const canvas = overlay;
+      const displaySize = { width: video.width, height: video.height };
+      faceapi.matchDimensions(canvas, displaySize);
+
+      setInterval(async () => {
+        if (faceMatched) return;
+
+        const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+          .withFaceLandmarks()
+          .withFaceDescriptor();
+
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (detection) {
+          const resizedDetections = faceapi.resizeResults(detection, displaySize);
+          faceapi.draw.drawDetections(canvas, resizedDetections);
+          faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
+
+          const descriptor = Array.from(detection.descriptor);
+          const result = await recognizeFace(descriptor);
+
+          if (result.status === 'success') {
+  const welcomeMessage = `Welcome ${result.name}, attendance marked at ${result.time}`;
+  statusText.textContent = `✅ ${welcomeMessage}`;
+
+  // 🔊 Speak it out
+  const utterance = new SpeechSynthesisUtterance(welcomeMessage);
+  utterance.lang = 'en-US'; // Change this to 'am-ET' for Amharic if you prefer
+  speechSynthesis.speak(utterance);
+
+  faceMatched = true;
+
+          } else if (result.status === 'no_match') {
+            statusText.textContent = "❌ Face not recognized.";
+          } else {
+            statusText.textContent = "⚠️ No known faces registered.";
+          }
+        } else {
+          statusText.textContent = "Looking for a face...";
+        }
+      }, 1500);
+    }
+
+    window.addEventListener("DOMContentLoaded", async () => {
+      await initCamera();
+      await loadModels();
+      detectLoop();
+    });
+  </script>
+</body>
+</html>
+g
